@@ -30,7 +30,9 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.PriorityQueue;
 
 public class HomeActivity extends Activity {
@@ -63,6 +65,9 @@ public class HomeActivity extends Activity {
   private PriorityQueue<Tweet> mTopTweets;
   // other tweets stored as a max-heap
   private PriorityQueue<Tweet> mOtherTweets;
+
+  // hashmap to speed up the searching
+  private Map<String, Tweet> mIdToTweet = new HashMap<String, Tweet>();
 
   private AsyncTask<Void, Void, Void> mTwitterThread;
 
@@ -194,18 +199,38 @@ public class HomeActivity extends Activity {
    * Otherwise, false.
    */
   private boolean addTweetToHeap(Tweet newTweet) {
-    if (mTopTweets.size() < NUM_TWEETS_TO_SHOW) {
-      mTopTweets.add(newTweet);
-      return true;
-    } else if (mTopTweets.peek().retweetCount <= newTweet.retweetCount) {
-      Tweet oldTopTweet = mTopTweets.remove();
-      mTopTweets.add(newTweet);
-      mOtherTweets.add(oldTopTweet);
-      return true;
+    // since the map and the heaps are pointing to the same reference, an update to the map will
+    // also make its way into the heap
+    if (!mIdToTweet.containsKey(newTweet.id)) {
+      // the original tweet is not stored yet, so add to the heap and then rebalance if needed
+      mIdToTweet.put(newTweet.id, newTweet);
+      if (mTopTweets.size() < NUM_TWEETS_TO_SHOW) {
+        mTopTweets.add(newTweet);
+        return true;
+      } else if (mTopTweets.peek().retweetCount <= newTweet.retweetCount) {
+        Tweet oldTopTweet = mTopTweets.remove();
+        mTopTweets.add(newTweet);
+        mOtherTweets.add(oldTopTweet);
+        return true;
+      } else {
+        mOtherTweets.add(newTweet);
+        return false;
+      }
     } else {
-      mOtherTweets.add(newTweet);
-      return false;
+      // the original tweet is already stored, so we need to rebalance the heaps if needed
+      mIdToTweet.get(newTweet.id).retweetCount = newTweet.retweetCount;
+      // reorder the two heaps
+      if (!mTopTweets.isEmpty() &&
+          !mOtherTweets.isEmpty() &&
+          mTopTweets.peek().retweetCount < mOtherTweets.peek().retweetCount) {
+        Tweet removedTopTweet = mTopTweets.remove();
+        Tweet removedOtherTweet = mOtherTweets.remove();
+        mTopTweets.add(removedOtherTweet);
+        mOtherTweets.add(removedTopTweet);
+        return true;
+      }
     }
+    return false;
   }
 
   /**
