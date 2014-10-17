@@ -5,7 +5,6 @@ import android.content.SharedPreferences;
 import android.os.AsyncTask;
 import android.os.Bundle;
 import android.preference.PreferenceManager;
-import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.WebView;
@@ -29,6 +28,7 @@ import org.scribe.oauth.OAuthService;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.PriorityQueue;
@@ -39,7 +39,7 @@ public class HomeActivity extends Activity {
   private static final String API_KEY = "yjKt1v505qifQiaw3PuHjsOFe";
   private static final String API_SECRET = "CzLbPZwV3sLTHmJ3hTV6APEv9pexy4u6AQmj8d97PWDNaiPQvm";
   private static final String TWITTER_STREAMING_SEPARATOR = "\r\n";
-  private static final long WINDOW_SIZE = 1000*60*5;
+  private static final long WINDOW_SIZE = 1000*60*60*24;
   private static final int NUM_TWEETS_TO_SHOW = 10;
 
   private SharedPreferences mSharedPrefs;
@@ -59,8 +59,10 @@ public class HomeActivity extends Activity {
   private EditText mAuthVerifier;
   private ViewGroup mContainer;
 
-  // tweet data stored in a max-heap implementation
-  private PriorityQueue<Tweet> mTweets;
+  // top tweets stored as a min-heap
+  private PriorityQueue<Tweet> mTopTweets;
+  // other tweets stored as a max-heap
+  private PriorityQueue<Tweet> mOtherTweets;
 
   private AsyncTask<Void, Void, Void> mTwitterThread;
 
@@ -78,15 +80,7 @@ public class HomeActivity extends Activity {
 
     mAdapter = new TweetAdapter(this);
     mListView.setAdapter(mAdapter);
-    mTweets = new PriorityQueue<Tweet>(
-        10,
-        new Comparator<Tweet>() {
-          @Override
-          public int compare(Tweet lhs, Tweet rhs) {
-            return rhs.retweetCount == lhs.retweetCount ? 1 : rhs.retweetCount - lhs.retweetCount;
-          }
-        }
-    );
+    setupQueues();
 
     mIsActive = true;
     if (!isAuthenticated()) {
@@ -108,7 +102,9 @@ public class HomeActivity extends Activity {
   @Override
   public void onPause() {
     super.onPause();
-    mTwitterThread.cancel(true);
+    if (mTwitterThread != null) {
+      mTwitterThread.cancel(true);
+    }
     mIsActive = false;
   }
 
@@ -128,35 +124,30 @@ public class HomeActivity extends Activity {
           byte[] bytes = new byte[4096];
           Gson gson = new Gson();
           while(stream.available() > 0 && mIsActive) {
-            int bytesRead = stream.read(bytes);
-            int totalBytesRead = bytesRead;
-            String s = new String(bytes, "UTF-8");
-            s = s.substring(0, totalBytesRead);
-            while (!s.endsWith(TWITTER_STREAMING_SEPARATOR)) {
-              bytesRead = stream.read(bytes);
-              String continuingStr = new String(bytes, "UTF-8");
-              s = s + continuingStr.substring(0, bytesRead);
-              totalBytesRead += bytesRead;
-            }
-            final Tweet tweet = gson.fromJson(s, Tweet.class);
-            if (tweet.isCreatedTweet()) {
+            final Tweet tweet = parseForNextTweet(stream, bytes, gson);
+
+            if (tweet.isRetweet() &&
+                tweet.retweetedStatus.isNotStale(System.currentTimeMillis(), WINDOW_SIZE)) {
               // update the UI on the UI thread instead of the background thread
-              Log.e("viet", s);
-              runOnUiThread(new Runnable() {
-                @Override
-                public void run() {
-                  addTweetToHeap(tweet);
-                  evictStaleTweets();
-                  List<Tweet> topTweets = new ArrayList<Tweet>();
-                  for (Tweet tweet : mTweets) {
-                    topTweets.add(tweet);
-                    if (topTweets.size() == NUM_TWEETS_TO_SHOW) {
-                      break;
+              evictStaleTweets();
+              if (addTweetToHeap(tweet.retweetedStatus)) {
+                runOnUiThread(new Runnable() {
+                  @Override
+                  public void run() {
+                    List<Tweet> topTweets = new ArrayList<Tweet>();
+                    for (Tweet tweet : mTopTweets) {
+                      topTweets.add(tweet);
                     }
+                    Collections.sort(topTweets, new Comparator<Tweet>() {
+                      @Override
+                      public int compare(Tweet lhs, Tweet rhs) {
+                        return rhs.retweetCount - lhs.retweetCount;
+                      }
+                    });
+                    mAdapter.setData(topTweets);
                   }
-                  mAdapter.setData(topTweets);
-                }
-              });
+                });
+              }
             }
           }
         } catch (IOException e) {
@@ -176,23 +167,62 @@ public class HomeActivity extends Activity {
     mTwitterThread.execute();
   }
 
-  private void addTweetToHeap(Tweet newTweet) {
-    mTweets.add(newTweet);
+  private Tweet parseForNextTweet(InputStream stream, byte[] bytes, Gson gson)
+      throws IOException {
+    int bytesRead = stream.read(bytes);
+    int totalBytesRead = bytesRead;
+    String s = new String(bytes, "UTF-8");
+    s = s.substring(0, totalBytesRead);
+    while (!s.endsWith(TWITTER_STREAMING_SEPARATOR)) {
+      bytesRead = stream.read(bytes);
+      String continuingStr = new String(bytes, "UTF-8");
+      s = s + continuingStr.substring(0, bytesRead);
+      totalBytesRead += bytesRead;
+    }
+    return gson.fromJson(s, Tweet.class);
+  }
+
+  /**
+   * Adds the tweet into one of the two heaps. Returns true if the Tweet was added to the top heap.
+   * Otherwise, false.
+   */
+  private boolean addTweetToHeap(Tweet newTweet) {
+    if (mTopTweets.size() < NUM_TWEETS_TO_SHOW) {
+      mTopTweets.add(newTweet);
+      return true;
+    } else if (mTopTweets.peek().retweetCount <= newTweet.retweetCount) {
+      Tweet oldTopTweet = mTopTweets.remove();
+      mTopTweets.add(newTweet);
+      mOtherTweets.add(oldTopTweet);
+      return true;
+    } else {
+      mOtherTweets.add(newTweet);
+      return false;
+    }
   }
 
   private void evictStaleTweets() {
-    List<Tweet> tweetsToEvict = new ArrayList<Tweet>();
     long currTime = System.currentTimeMillis();
+    evictStaleTweets(mOtherTweets, currTime);
+    evictStaleTweets(mTopTweets, currTime);
+    // max out the topTweets queue using the top-valued nodes in otherTweets
+    while (mTopTweets.size() < NUM_TWEETS_TO_SHOW && mOtherTweets.size() > 0) {
+      mTopTweets.add(mOtherTweets.remove());
+    }
+  }
+
+  private void evictStaleTweets(PriorityQueue<Tweet> tweets, long currTime) {
+    List<Tweet> tweetsToEvict = new ArrayList<Tweet>();
     // compute which tweets to evict
-    for (Tweet tweet : mTweets) {
-      if (tweet.timestamp < currTime - WINDOW_SIZE) {
+    for (Tweet tweet : tweets) {
+      if (tweet.getCreationTimestamp() < currTime - WINDOW_SIZE) {
         tweetsToEvict.add(tweet);
       }
     }
 
     // perform the eviction
     for (Tweet tweet : tweetsToEvict) {
-      mTweets.remove(tweet);
+      tweets.remove(tweet);
     }
   }
 
@@ -257,6 +287,28 @@ public class HomeActivity extends Activity {
         retrieveAccessToken(mAccessToken, new Verifier(verifier));
       }
     });
+  }
+
+  private void setupQueues() {
+    mTopTweets = new PriorityQueue<Tweet>(
+        10,
+        new Comparator<Tweet>() {
+          @Override
+          public int compare(Tweet lhs, Tweet rhs) {
+            return rhs.retweetCount == lhs.retweetCount ? 1 : lhs.retweetCount - rhs.retweetCount;
+          }
+        }
+    );
+
+    mOtherTweets = new PriorityQueue<Tweet>(
+        10,
+        new Comparator<Tweet>() {
+          @Override
+          public int compare(Tweet lhs, Tweet rhs) {
+            return rhs.retweetCount == lhs.retweetCount ? 1 : rhs.retweetCount - lhs.retweetCount;
+          }
+        }
+    );
   }
 
   private boolean isAuthenticated() {

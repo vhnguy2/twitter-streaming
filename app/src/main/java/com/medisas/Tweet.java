@@ -1,17 +1,22 @@
 package com.medisas;
 
+import android.util.Log;
+
 import com.google.gson.annotations.SerializedName;
+
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 
 public class Tweet {
 
+  private static final String TAG = Tweet.class.getCanonicalName();
+
+  // example: Wed Aug 27 13:08:45 +0000 2008
+  private static final SimpleDateFormat df = new SimpleDateFormat("EEE MMMM dd hh:mm:ss Z yyyy");
+
   @SerializedName("created_at")
   public String createdAt;
-
-  @SerializedName("timestamp_ms")
-  public long timestamp;
-
-  @SerializedName("id")
-  public String id;
 
   @SerializedName("text")
   public String text;
@@ -22,8 +27,26 @@ public class Tweet {
   @SerializedName("retweeted")
   public boolean retweeted;
 
-  public boolean isCreatedTweet() {
-    return createdAt != null;
+  @SerializedName("retweeted_status")
+  public Tweet retweetedStatus;
+
+  public boolean isRetweet() {
+    return retweetedStatus != null;
+  }
+
+  public boolean isNotStale(long currTime, long windowSize) {
+    return getCreationTimestamp() > currTime - windowSize;
+  }
+
+  public long getCreationTimestamp() {
+    try {
+      Date date = df.parse(createdAt);
+      return date.getTime();
+    } catch (ParseException e) {
+      Log.e(TAG, e.getMessage());
+    }
+
+    return 0;
   }
 
   public String toString() {
