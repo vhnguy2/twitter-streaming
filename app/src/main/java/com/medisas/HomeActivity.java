@@ -125,29 +125,13 @@ public class HomeActivity extends Activity {
           Gson gson = new Gson();
           while(stream.available() > 0 && mIsActive) {
             final Tweet tweet = parseForNextTweet(stream, bytes, gson);
-
             if (tweet.isRetweet() &&
-                tweet.retweetedStatus.isNotStale(System.currentTimeMillis(), WINDOW_SIZE)) {
-              // update the UI on the UI thread instead of the background thread
-              evictStaleTweets();
-              if (addTweetToHeap(tweet.retweetedStatus)) {
-                runOnUiThread(new Runnable() {
-                  @Override
-                  public void run() {
-                    List<Tweet> topTweets = new ArrayList<Tweet>();
-                    for (Tweet tweet : mTopTweets) {
-                      topTweets.add(tweet);
-                    }
-                    Collections.sort(topTweets, new Comparator<Tweet>() {
-                      @Override
-                      public int compare(Tweet lhs, Tweet rhs) {
-                        return rhs.retweetCount - lhs.retweetCount;
-                      }
-                    });
-                    mAdapter.setData(topTweets);
-                  }
-                });
-              }
+                tweet.retweetedStatus.isNotStale(System.currentTimeMillis(), WINDOW_SIZE) &&
+                addTweetToHeap(tweet.retweetedStatus)) {
+              updateListView();
+            }
+            if (evictStaleTweets()) {
+              updateListView();
             }
           }
         } catch (IOException e) {
@@ -165,6 +149,26 @@ public class HomeActivity extends Activity {
     };
 
     mTwitterThread.execute();
+  }
+
+  private void updateListView() {
+    // update the UI on the UI thread instead of the background thread
+    runOnUiThread(new Runnable() {
+      @Override
+      public void run() {
+        List<Tweet> topTweets = new ArrayList<Tweet>();
+        for (Tweet tweet : mTopTweets) {
+          topTweets.add(tweet);
+        }
+        Collections.sort(topTweets, new Comparator<Tweet>() {
+          @Override
+          public int compare(Tweet lhs, Tweet rhs) {
+            return rhs.retweetCount - lhs.retweetCount;
+          }
+        });
+        mAdapter.setData(topTweets);
+      }
+    });
   }
 
   private Tweet parseForNextTweet(InputStream stream, byte[] bytes, Gson gson)
@@ -201,17 +205,25 @@ public class HomeActivity extends Activity {
     }
   }
 
-  private void evictStaleTweets() {
+  /**
+   * Evicts all stale tweets. In the case where topTweets changes return true, otherwise, false.
+   */
+  private boolean evictStaleTweets() {
     long currTime = System.currentTimeMillis();
     evictStaleTweets(mOtherTweets, currTime);
-    evictStaleTweets(mTopTweets, currTime);
+    boolean topTweetsChanged = evictStaleTweets(mTopTweets, currTime);
     // max out the topTweets queue using the top-valued nodes in otherTweets
     while (mTopTweets.size() < NUM_TWEETS_TO_SHOW && mOtherTweets.size() > 0) {
       mTopTweets.add(mOtherTweets.remove());
     }
+
+    return topTweetsChanged;
   }
 
-  private void evictStaleTweets(PriorityQueue<Tweet> tweets, long currTime) {
+  /**
+   * Evicts stale tweets from the list. In the case tweets are evicted return true, otherwise, false
+   */
+  private boolean evictStaleTweets(PriorityQueue<Tweet> tweets, long currTime) {
     List<Tweet> tweetsToEvict = new ArrayList<Tweet>();
     // compute which tweets to evict
     for (Tweet tweet : tweets) {
@@ -224,6 +236,8 @@ public class HomeActivity extends Activity {
     for (Tweet tweet : tweetsToEvict) {
       tweets.remove(tweet);
     }
+
+    return !tweetsToEvict.isEmpty();
   }
 
   private void authenticateUser() {
