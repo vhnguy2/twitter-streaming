@@ -125,10 +125,13 @@ public class HomeActivity extends Activity {
           Gson gson = new Gson();
           while(stream.available() > 0 && mIsActive) {
             final Tweet tweet = parseForNextTweet(stream, bytes, gson);
-            if (tweet.isRetweet() &&
-                tweet.retweetedStatus.isNotStale(System.currentTimeMillis(), WINDOW_SIZE) &&
-                addTweetToHeap(tweet.retweetedStatus)) {
-              updateListView();
+            if (tweet.isRetweet()) {
+              // push more timing information into the child tweet
+              tweet.retweetedStatus.lastKnownRetweetedTime = tweet.createdAt;
+              if (tweet.retweetedStatus.isNotStale(System.currentTimeMillis(), WINDOW_SIZE) &&
+                  addTweetToHeap(tweet.retweetedStatus)) {
+                updateListView();
+              }
             }
             if (evictStaleTweets()) {
               updateListView();
@@ -227,7 +230,7 @@ public class HomeActivity extends Activity {
     List<Tweet> tweetsToEvict = new ArrayList<Tweet>();
     // compute which tweets to evict
     for (Tweet tweet : tweets) {
-      if (tweet.getCreationTimestamp() < currTime - WINDOW_SIZE) {
+      if (tweet.getLastKnownRetweetedTime() < currTime - WINDOW_SIZE) {
         tweetsToEvict.add(tweet);
       }
     }
