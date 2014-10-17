@@ -206,7 +206,7 @@ public class HomeActivity extends Activity {
     retrieveRequestToken();
   }
 
-    private void retrieveRequestToken() {
+  private void retrieveRequestToken() {
     AsyncTask<Void, Void, Token> task = new AsyncTask<Void, Void, Token>() {
       @Override
       protected Token doInBackground(Void... nulls) {
